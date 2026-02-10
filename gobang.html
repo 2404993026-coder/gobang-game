@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>五子棋 - 超大棋盘版（双人+AI）</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: "Microsoft Yahei", sans-serif;
+        }
+
+        body {
+            background: #f5f5f5;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+            gap: 15px;
+            overflow-x: auto; /* 适配超大棋盘横向滚动 */
+        }
+
+        h1 {
+            color: #333;
+        }
+
+        .control-panel {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        .control-panel select, .control-panel button {
+            padding: 8px 16px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+            cursor: pointer;
+        }
+
+        .status {
+            font-size: 16px;
+            color: #555;
+            height: 24px;
+        }
+
+        .chessboard {
+            display: grid;
+            background-color: #e6c890;
+            border: 10px solid #b98c50;
+            border-radius: 8px;
+            padding: 0;
+            gap: 0;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+
+        .chess-cell {
+            position: relative;
+            cursor: pointer;
+        }
+
+        .chess-cell::before {
+            content: '';
+            position: absolute;
+            width: 1px;
+            height: 100%;
+            background-color: #886e4d;
+            left: 0;
+            top: 0;
+            z-index: 1;
+        }
+
+        .chess-cell::after {
+            content: '';
+            position: absolute;
+            height: 1px;
+            width: 100%;
+            background-color: #886e4d;
+            top: 0;
+            left: 0;
+            z-index: 1;
+        }
+
+        .chess {
+            position: absolute;
+            border-radius: 50%;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 2;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+
+        .chess.black {
+            background-color: #1a1a1a;
+        }
+
+        .chess.white {
+            background-color: #ffffff;
+            border: 1px solid #e0e0e0;
+        }
+    </style>
+</head>
+<body>
+    <h1>五子棋 - 超大棋盘版（双人+AI）</h1>
+    
+    <div class="control-panel">
+        <select id="game-mode">
+            <option value="ai">人机对战（黑棋）</option>
+            <option value="2p">双人对战</option>
+        </select>
+        <select id="board-config">
+            <option value="15,35">15×15（中等）</option>
+            <option value="19,30">19×19（标准）</option>
+            <option value="15,40">15×15（大号）</option>
+            <option value="19,40">19×19（超大）</option>
+            <option value="15,45">15×15（特大）</option>
+        </select>
+        <select id="ai-strength">
+            <option value="1">入门AI</option>
+            <option value="2">业余AI</option>
+            <option value="3" selected>高手AI</option>
+        </select>
+        <button id="restart">重新开始</button>
+    </div>
+
+    <div class="status" id="status">游戏开始：你（黑棋）先行</div>
+    
+    <div class="chessboard" id="chessboard"></div>
+
+    <script>
+        const EMPTY = 0;
+        const BLACK = 1;
+        const WHITE = 2;
+        const DIRS = [[1,0], [0,1], [1,1], [1,-1]];
+
+        const chessboardEl = document.getElementById('chessboard');
+        const statusEl = document.getElementById('status');
+        const modeEl = document.getElementById('game-mode');
+        const boardConfigEl = document.getElementById('board-config');
+        const aiStrengthEl = document.getElementById('ai-strength');
+        const restartBtn = document.getElementById('restart');
+
+        let BOARD_SIZE = 15;
+        let CELL_SIZE = 35;
+        let CHESS_SIZE = CELL_SIZE - 6;
+        let board = [];
+        let isGameOver = false;
+        let aiStrength = 3;
+        let gameMode = 'ai';
+        let currentPlayer = BLACK;
+
+        function initGame() {
+            const [size, cellSize] = boardConfigEl.value.split(',').map(Number);
+            BOARD_SIZE = size;
+            CELL_SIZE = cellSize;
+            CHESS_SIZE = CELL_SIZE - 6; // 棋子比格子小6px，保证不溢出
+
+            aiStrength = parseInt(aiStrengthEl.value);
+            gameMode = modeEl.value;
+            currentPlayer = BLACK;
+            isGameOver = false;
+
+            initBoard();
+
+            if (gameMode === '2p') {
+                statusEl.textContent = '双人对战：黑棋先行';
+            } else {
+                statusEl.textContent = '人机对战：你（黑棋）先行';
+            }
+        }
+
+        function initBoard() {
+            chessboardEl.innerHTML = '';
+            // 适配超大棋盘的网格布局
+            chessboardEl.style.gridTemplateColumns = `repeat(${BOARD_SIZE}, ${CELL_SIZE}px)`;
+            chessboardEl.style.gridTemplateRows = `repeat(${BOARD_SIZE}, ${CELL_SIZE}px)`;
+            board = Array(BOARD_SIZE).fill().map(() => Array(BOARD_SIZE).fill(EMPTY));
+
+            for (let y = 0; y < BOARD_SIZE; y++) {
+                for (let x = 0; x < BOARD_SIZE; x++) {
+                    const cell = document.createElement('div');
+                    cell.className = 'chess-cell';
+                    cell.style.width = `${CELL_SIZE}px`;
+                    cell.style.height = `${CELL_SIZE}px`;
+                    cell.dataset.x = x;
+                    cell.dataset.y = y;
+                    cell.addEventListener('click', () => handleCellClick(x, y));
+                    chessboardEl.appendChild(cell);
+                }
+            }
+
+            // 补全最后一列竖线
+            const lastCol = document.querySelectorAll(`.chess-cell[data-x="${BOARD_SIZE-1}"]`);
+            lastCol.forEach(c => {
+                const line = document.createElement('div');
+                line.style.cssText = 'position:absolute; width:1px; height:100%; right:0; top:0; background:#886e4d';
+                c.appendChild(line);
+            });
+
+            // 补全最后一行横线
+            const lastRow = document.querySelectorAll(`.chess-cell[data-y="${BOARD_SIZE-1}"]`);
+            lastRow.forEach(c => {
+                const line = document.createElement('div');
+                line.style.cssText = 'position:absolute; height:1px; width:100%; bottom:0; left:0; background:#886e4d';
+                c.appendChild(line);
+            });
+        }
+
+        function handleCellClick(x, y) {
+            if (isGameOver || board[y][x] !== EMPTY) return;
+
+            // 落子
+            placeChess(x, y, currentPlayer);
+
+            // 检查胜负
+            if (checkWin(x, y, currentPlayer)) {
+                isGameOver = true;
+                statusEl.textContent = currentPlayer === BLACK ? '黑棋胜！' : '白棋胜！';
+                return;
+            }
+
+            // 检查平局
+            if (isBoardFull()) {
+                isGameOver = true;
+                statusEl.textContent = '平局！';
+                return;
+            }
+
+            // 切换回合/AI落子
+            if (gameMode === '2p') {
+                // 双人模式：切换玩家
+                currentPlayer = currentPlayer === BLACK ? WHITE : BLACK;
+                statusEl.textContent = `轮到：${currentPlayer === BLACK ? '黑棋' : '白棋'}`;
+            } else {
+                // 人机模式：AI落子
+                statusEl.textContent = 'AI思考中...';
+                setTimeout(() => aiMove(), 500);
+            }
+        }
+
+        function placeChess(x, y, color) {
+            board[y][x] = color;
+            const cell = document.querySelector(`.chess-cell[data-x="${x}"][data-y="${y}"]`);
+            const chess = document.createElement('div');
+            chess.className = `chess ${color === BLACK ? 'black' : 'white'}`;
+            chess.style.width = `${CHESS_SIZE}px`;
+            chess.style.height = `${CHESS_SIZE}px`;
+            cell.appendChild(chess);
+        }
+
+        function checkWin(x, y, color) {
+            for (const [dx, dy] of DIRS) {
+                let cnt = 1;
+                // 正向检测
+                for (let i = 1; i < 5; i++) {
+                    const nx = x + dx * i;
+                    const ny = y + dy * i;
+                    if (isInBoard(nx, ny) && board[ny][nx] === color) cnt++;
+                    else break;
+                }
+                // 反向检测
+                for (let i = 1; i < 5; i++) {
+                    const nx = x - dx * i;
+                    const ny = y - dy * i;
+                    if (isInBoard(nx, ny) && board[ny][nx] === color) cnt++;
+                    else break;
+                }
+                if (cnt >= 5) return true;
+            }
+            return false;
+        }
+
+        function isInBoard(x, y) {
+            return x >= 0 && x < BOARD_SIZE && y >= 0 && y < BOARD_SIZE;
+        }
+
+        function isBoardFull() {
+            for (let y = 0; y < BOARD_SIZE; y++) {
+                for (let x = 0; x < BOARD_SIZE; x++) {
+                    if (board[y][x] === EMPTY) return false;
+                }
+            }
+            return true;
+        }
+
+        // ========== 高手级AI逻辑 ==========
+        function aiMove() {
+            if (isGameOver) return;
+
+            // 1. 优先：AI自己能赢的位置
+            const aiWinPos = findWinningMove(WHITE);
+            if (aiWinPos) {
+                placeChess(aiWinPos.x, aiWinPos.y, WHITE);
+                checkAiResult(aiWinPos.x, aiWinPos.y);
+                return;
+            }
+
+            // 2. 次优：堵玩家能赢的位置
+            const playerWinPos = findWinningMove(BLACK);
+            if (playerWinPos) {
+                placeChess(playerWinPos.x, playerWinPos.y, WHITE);
+                checkAiResult(playerWinPos.x, playerWinPos.y);
+                return;
+            }
+
+            // 3. 高手级：找最佳攻防位（评分系统）
+            let bestPos = null;
+            let bestScore = -Infinity;
+
+            for (let y = 0; y < BOARD_SIZE; y++) {
+                for (let x = 0; x < BOARD_SIZE; x++) {
+                    if (board[y][x] !== EMPTY) continue;
+
+                    // 计算攻防总分
+                    const attackScore = calculateScore(x, y, WHITE, BLACK);
+                    const defenseScore = calculateScore(x, y, BLACK, WHITE);
+                    
+                    // 不同强度的权重
+                    let totalScore;
+                    if (aiStrength === 1) {
+                        totalScore = defenseScore * 1.2 + attackScore * 0.8; // 入门：优先防守
+                    } else if (aiStrength === 2) {
+                        totalScore = attackScore + defenseScore; // 业余：攻防平衡
+                    } else {
+                        totalScore = attackScore * 1.5 + defenseScore * 1.2; // 高手：优先进攻
+                    }
+
+                    // 中心位置加分（五子棋核心策略）
+                    const centerBonus = 100 / (1 + Math.sqrt(Math.pow(x - BOARD_SIZE/2, 2) + Math.pow(y - BOARD_SIZE/2, 2)));
+                    totalScore += centerBonus;
+
+                    if (totalScore > bestScore) {
+                        bestScore = totalScore;
+                        bestPos = {x, y};
+                    }
+                }
+            }
+
+            // 兜底：随机选中心附近
+            if (!bestPos) {
+                bestPos = {x: Math.floor(BOARD_SIZE/2), y: Math.floor(BOARD_SIZE/2)};
+                if (board[bestPos.y][bestPos.x] !== EMPTY) {
+                    for (let y = 0; y < BOARD_SIZE; y++) {
+                        for (let x = 0; x < BOARD_SIZE; x++) {
+                            if (board[y][x] === EMPTY) {
+                                bestPos = {x, y};
+                                break;
+                            }
+                        }
+                        if (bestPos) break;
+                    }
+                }
+            }
+
+            // AI落子
+            placeChess(bestPos.x, bestPos.y, WHITE);
+            checkAiResult(bestPos.x, bestPos.y);
+        }
+
+        // 找能直接赢的位置
+        function findWinningMove(color) {
+            for (let y = 0; y < BOARD_SIZE; y++) {
+                for (let x = 0; x < BOARD_SIZE; x++) {
+                    if (board[y][x] !== EMPTY) continue;
+                    
+                    // 模拟落子
+                    board[y][x] = color;
+                    const canWin = checkWin(x, y, color);
+                    // 还原
+                    board[y][x] = EMPTY;
+                    
+                    if (canWin) return {x, y};
+                }
+            }
+            return null;
+        }
+
+        // 计算位置评分（核心：识别活二/活三/冲四）
+        function calculateScore(x, y, color, oppColor) {
+            let score = 0;
+            const dirWeights = [1, 1, 1.2, 1.2]; // 斜向更重要
+
+            for (let d = 0; d < DIRS.length; d++) {
+                const [dx, dy] = DIRS[d];
+                let line = [];
+                
+                // 取当前位置前后4格的线
+                for (let i = -4; i <= 4; i++) {
+                    const nx = x + dx * i;
+                    const ny = y + dy * i;
+                    line.push(isInBoard(nx, ny) ? board[ny][nx] : -1);
+                }
+
+                // 替换为标记
+                const lineStr = line.map(v => {
+                    if (v === color) return 'O';
+                    if (v === oppColor) return 'X';
+                    if (v === EMPTY) return '.';
+                    return '#'; // 边界
+                }).join('');
+
+                // 评分规则（五子棋专业棋型）
+                if (/OOOOO/.test(lineStr)) score += 100000;    // 五连
+                else if (/\.OOOO\./.test(lineStr)) score += 10000; // 活四
+                else if (/XOOOO\.|\.OOOOX|O\.OOO|OOO\.O|OO\.OO/.test(lineStr)) score += 5000; // 冲四
+                else if (/\.OOO\./.test(lineStr)) score += 1000; // 活三
+                else if (/\.O\.OO\.|\.OO\.O\./.test(lineStr)) score += 800; // 跳活三
+                else if (/XOOO\.|\.OOOX/.test(lineStr)) score += 500; // 断三
+                else if (/\.OO\./.test(lineStr)) score += 100; // 活二
+                else if (/\.O\.O\./.test(lineStr)) score += 80; // 跳活二
+                else if (/\.O\./.test(lineStr)) score += 10; // 活一
+
+                // 乘方向权重
+                score *= dirWeights[d];
+            }
+
+            return score;
+        }
+
+        function checkAiResult(x, y) {
+            // 检查AI获胜
+            if (checkWin(x, y, WHITE)) {
+                isGameOver = true;
+                statusEl.textContent = 'AI赢了！（高手级就是不一样）';
+                return;
+            }
+
+            // 检查平局
+            if (isBoardFull()) {
+                isGameOver = true;
+                statusEl.textContent = '平局！';
+                return;
+            }
+
+            // 切回玩家回合
+            currentPlayer = BLACK;
+            statusEl.textContent = '你的回合（黑棋）';
+        }
+
+        // ========== 事件绑定 ==========
+        restartBtn.addEventListener('click', initGame);
+        modeEl.addEventListener('change', initGame);
+        boardConfigEl.addEventListener('change', initGame);
+        aiStrengthEl.addEventListener('change', initGame);
+
+        // 初始化游戏
+        initGame();
+    </script>
+</body>
+</html>
